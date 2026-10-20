@@ -1,6 +1,11 @@
-# Omarchy Launcher, improved
+# Omarchy Launcher v2 (plugin)
 
-More functions, more practicality, more power. Implemented the following:
+KRunner-grade upgrades for the Omarchy menu, packaged as an
+[Omarchy plugin](https://plugins.omarchy.org): websearching, files & folders,
+full-text search, calculations, unit conversion, colour answers, window
+switching, and recent documents with learning rankings — all in the same
+minimal menu, with zero new daemons.
+
 - websearching
 - finds files & folders — **folders and files in two blocks**, five each, with a
   "more" row that hands the query to your file manager, Baloo content hits in a
@@ -15,8 +20,6 @@ More functions, more practicality, more power. Implemented the following:
 - window switching
 - recent documents with learning rankings
 
-All in the same minimal menu, with zero new daemons.
-
 <p align="center">
   <img src="screenshots/calculate.png" alt="calculator answer coexisting with file results" width="49%">
   <img src="screenshots/files-folders.png" alt="file and folder search" width="49%">
@@ -26,6 +29,11 @@ All in the same minimal menu, with zero new daemons.
   <img src="screenshots/distance.png" alt="unit conversion" width="49%">
   <img src="screenshots/time.png" alt="date answer" width="49%">
 </p>
+
+This is the plugin edition. The original file-replacement pack — which
+*replaces* the stock menu instead of installing alongside it, and adds a
+close-fade fix that plugins cannot carry — lives at
+[IsseyShiitake/omarchy-launcher-v2](https://github.com/IsseyShiitake/omarchy-launcher-v2).
 
 ## What you get
 
@@ -204,8 +212,9 @@ behaviour.
 
 One probe runs at shell start. It checks `fd`, `hyprctl`, `baloosearch6`,
 `wl-copy`, `wl-paste`, the opener binaries (`kde-open`, `gio`, `xdg-open`)
-**and the window-focus helper** (`~/.local/bin/ravi-window-focus`, installed
-by `install.sh` — window rows are Enter-able only when it is there).
+**and the window-focus helper** (`~/.local/bin/ravi-window-focus`, installed by
+the one-line command under [Requirements](#requirements) — window rows are
+Enter-able only when it is there).
 If a tier's tool is absent, that tier is switched off (no dead subprocess per
 keystroke)
 and a dimmed `Missing: …` row says so under the results — for the openers,
@@ -218,8 +227,11 @@ restarting the shell.
 
 ### Tuning (one line each, all ON by default)
 
-Every switch lives at the top of `Menu.qml`, in the "Result presentation
-switches" block — flip one and restart the shell:
+Every switch lives at the top of the plugin's `files/Menu.qml`, in the "Result
+presentation switches" block — flip one and restart the shell. Edits land in the
+installed checkout (`~/.config/omarchy/plugins/io.github.isseyshiitake.launcher-v2/`);
+note that `omarchy plugin update` refreshes that checkout and will overwrite
+local edits.
 
 | Property | Default | Effect |
 |---|---|---|
@@ -242,15 +254,23 @@ switches" block — flip one and restart the shell:
 
 ## Requirements
 
-- An Omarchy-style shell checkout with the `omarchy.menu` plugin
-  (`~/.local/share/omarchy/shell/plugins/menu/`) running under Hyprland +
-  Quickshell (tested: Quickshell 0.2.1, Hyprland 0.56.2 with the lua dispatch)
+- Omarchy's plugin-capable shell running under Hyprland + Quickshell
+  (tested: Quickshell 0.2.1, Hyprland 0.56.2 with the lua dispatch, the
+  plugin system of Omarchy Quattro)
 - `fd` — file/folder search (as are `hyprctl`, `wl-copy`, `wl-paste` and
   `baloosearch6` below: the tiers spawn each tool from `/usr/bin`, and the
   probe checks exactly that path — a PATH-only or non-FHS install is reported
   as missing rather than failing silently)
-- `hyprctl` plus the `ravi-window-focus` helper (`install.sh` puts it in
-  `~/.local/bin`) — window switcher
+- `hyprctl` — window listing. For **Enter-able** window rows, the
+  `ravi-window-focus` helper (one command; without it the tier is visible but
+  its rows report the helper missing, and nothing else breaks):
+
+  ```sh
+  install -Dm755 \
+    ~/.config/omarchy/plugins/io.github.isseyshiitake.launcher-v2/files/ravi-window-focus \
+    ~/.local/bin/ravi-window-focus
+  ```
+
 - `wl-copy` and `wl-paste` (wl-clipboard) — copy actions and Ctrl+V paste
 - a file manager — `dolphin`, `nautilus`, `thunar`, `nemo`, `pcmanfm` or `files`
   (detected, not required): its own opener is used for Enter, and Dolphin's
@@ -260,74 +280,65 @@ switches" block — flip one and restart the shell:
   preference according to the detected file manager (`xdg-open` is the fallback)
 - optional: `baloosearch6` + a running Baloo index — content search tier
   (without it the tier is simply empty; nothing breaks)
-- optional: `git` or `patch` — only for the menu-ranking patch; the pack
-  installs fine without them (ranking falls back to upstream behavior)
 
 ## Install
 
 ```sh
-git clone https://github.com/IsseyShiitake/omarchy-launcher-v2.git
-cd omarchy-launcher-v2
-bash install.sh
+omarchy plugin add https://github.com/IsseyShiitake/omarchy-launcher-v2-plugin.git --enable
 ```
 
-The installer:
-
-1. checks dependencies and tells you which tiers any missing one degrades,
-2. backs up every file it touches to `~/.local/share/omarchy-backups/launcher-v2/<timestamp>/`,
-3. copies in the enhanced files (and `~/.local/bin/ravi-window-focus` for window focusing),
-4. applies the optional 5-line menu-ranking patch (skipped harmlessly if your base differs),
-5. restarts the shell if it can (Quickshell has no QML hot-reload — log out/in otherwise).
-
-Re-running `bash install.sh` is a safe update: it overwrites, and takes a fresh
-backup whenever the installed files — or the live quickshell mirror — differ
-from the pack. An identical re-run takes no new backup (the existing pristine
-snapshot stays the one uninstall restores).
-
-## Uninstall / rollback
+The plugin installs as a **second, independent menu** alongside the stock
+Omarchy menu — it does not replace anything. Open it with:
 
 ```sh
-bash uninstall.sh
+omarchy-shell shell toggle io.github.isseyshiitake.launcher-v2
 ```
 
-Restores the newest backup **if it holds the pre-pack files**, otherwise the
-pristine files from the Omarchy git checkout. Snapshots record which they are
-(`BACKUP_KIND`), because an older pack revision is not the same thing as the
-originals — installing over a previous version of this pack marks its snapshot
-`modified`, and uninstall then restores the checkout and keeps the snapshot as a
-safety net. The frecency state file is inert without the
-pack — keep or delete it.
+To put it on your launcher key instead of the stock menu, point that binding at
+the plugin — in Omarchy's `hyprland.lua` (adjust the chord to taste; the stock
+launcher binding keeps working unchanged):
 
-## What it modifies
+```lua
+hl.bind("SUPER + SPACE",
+  hl.dsp.exec_cmd("omarchy-shell shell toggle io.github.isseyshiitake.launcher-v2"),
+  { description = "Launcher v2" })
+```
 
-| File | Change |
-|---|---|
-| `shell/plugins/menu/Menu.qml` | All new tiers, answer rows, frecency, right-click copy (drop-in replacement) |
-| `shell/Ui/OverlayWindow.qml` | Holds overlay geometry ~280 ms on close so the menu's fade-out can play (drop-in replacement) |
-| `shell/plugins/menu/MenuModel.js` | Optional: leaf actions rank above submenu containers (applied as a patch) |
-| `~/.local/bin/ravi-window-focus` | New helper: focuses a window by address via Hyprland's lua dispatch |
+In-shell deep routes (`super + shift + q` for the system menu and friends) keep
+targeting the stock menu; this plugin is a parallel launcher, not a takeover.
 
-`patches/omarchy-launcher-v2.patch` is the complete, reviewable diff of
-all three files against upstream Omarchy shell commit `821ae58` — if you run
-that base you may `git apply` it instead of copying files. The patch covers
-those three files only: also install the window-focus helper with
-`install -Dm755 files/ravi-window-focus ~/.local/bin/ravi-window-focus`
-(without it the window tier switches itself off and the `Missing:` row says
-so — window rows are never shown as Enter-able dead ends).
-`patches/menu-model-ranking.patch` is the standalone ranking hunk, and the
-complete patch *includes* it — regenerate the two together, never one alone.
+### What plugin mode does differently
+
+For transparency, the trade-offs of the plugin format against the
+[file-replacement pack](https://github.com/IsseyShiitake/omarchy-launcher-v2):
+
+- The launcher key keeps opening the stock menu until you rebind (above).
+- The pack's close-fade fix (a replacement `Ui/OverlayWindow.qml`) cannot ship
+  inside a plugin, so closing uses the shell's stock close behaviour.
+- The menu-ranking tweak (leaf actions above submenu containers) is **built
+  in** here — the plugin carries its own patched `MenuModel.js` rather than
+  patching your checkout.
+- `ravi-window-focus` is not auto-installed; the Requirements section has the
+  one command.
+
+## Uninstall
+
+```sh
+omarchy plugin remove io.github.isseyshiitake.launcher-v2
+```
+
+If you rebound the launcher key or installed the helper, undo those by hand;
+the frecency state file is inert without the plugin — keep or delete it.
 
 ## Compatibility
 
 Tested against Omarchy shell `821ae58` (2026-10-02), Quickshell 0.2.1,
-Hyprland 0.56.2 on Fedora 44. The QML is defensive: missing binaries, empty or
-malformed recents/places files, and unreadable JSON all degrade to empty
-tiers rather than errors. Newer upstream `Menu.qml` versions may drift —
-prefer the patch route if your base matches, and re-check after Omarchy
-updates (`install.sh` warns when the checkout is not at the tested commit).
-An `omarchy update` that pulls newer upstream files can conflict
-with these; if the launcher misbehaves after an update, re-run
-`bash install.sh` (it re-applies; a backup is taken if anything differs).
+Hyprland 0.56.2 on Fedora 44, and validated with `omarchy plugin validate`.
+The QML is defensive: missing binaries, empty or malformed recents/places
+files, and unreadable JSON all degrade to empty tiers rather than errors.
+Upstream `Menu.qml` drift affects the plugin the same way it affects the pack —
+after an Omarchy update, if the launcher misbehaves, check for a newer version
+here (`omarchy plugin update io.github.isseyshiitake.launcher-v2`).
 
 ## Privacy notes
 
@@ -342,6 +353,6 @@ choose to press Enter on.
 
 ## Credits & license
 
-Built on top of [Omarchy](https://omarchy.org) by DHH and contributors — the
-three modified files derive from the Omarchy shell (MIT). This pack is released
-under the MIT License too; see [LICENSE](LICENSE).
+Built on top of [Omarchy](https://omarchy.org) by DHH and contributors —
+`files/Menu.qml` and `files/MenuModel.js` derive from the Omarchy shell (MIT).
+This plugin is released under the MIT License too; see [LICENSE](LICENSE).

@@ -2,10 +2,9 @@ MIT License
 
 Copyright (c) 2026 ravi
 
-Portions of files/Menu.qml, files/OverlayWindow.qml and the MenuModel.js
-patch derive from the Omarchy shell (https://omarchy.org), Copyright (c)
-David Heinemeier Hansson and Omarchy contributors, also released under the
-MIT License.
+Portions of files/Menu.qml and files/MenuModel.js derive from the Omarchy
+shell (https://omarchy.org), Copyright (c) David Heinemeier Hansson and
+Omarchy contributors, also released under the MIT License.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
