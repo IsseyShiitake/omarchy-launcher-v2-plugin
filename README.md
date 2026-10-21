@@ -69,12 +69,15 @@ Every search reads top to bottom as one story, with a hairline wherever the
 3. **Open windows** — title, then `class · workspace N`; Enter focuses it.
 4. **Folders** — up to five, then `More folders…` when there were more.
 5. **Files** — up to five, then `More files…` when there were more.
-6. **File contents** — Baloo full-text hits, in a block of their own behind a
+6. **File contents** — Baloo hits, in a block of their own behind a
    hairline, each marked `content · ~/where/it/lives`. They are a different kind
-   of match (the query was found *inside* the file, not in its name), so they
-   are never mixed into the file block: three rows that look exactly like files
-   and appear after `More files…` read as "the list is broken", not as "another
-   tier" — which is what they used to do.
+   of match, so they are never mixed into the file block: three rows that look
+   exactly like files and appear after `More files…` read as "the list is
+   broken", not as "another tier" — which is what they used to do.
+   Baloo's default search is the file's **name or its contents**, so a name
+   match can land here too; the file tier is searched first and its hits are
+   kept, so what reaches this block is usually a hit Baloo found inside the
+   file.
 7. **Notices** — a dimmed row when a tool is missing, a binary is not installed,
    or a block was capped with nowhere to hand the rest.
 8. **Web search** — always last, and the only row that leaves the machine.
@@ -134,31 +137,74 @@ row does nothing.
 **Every answer row confirms its copy the same way and stays open** — maths
 and conversions show `Copied!`, a colour shows `Color copied!` — because the
 pill lives inside the card, and closing in the same breath would hide it
-before it is seen. Enter again re-copies; **Esc** or a click outside
-dismisses. The pill used to be the theme's 8 %-alpha highlight, which read
-straight through a busy background — it is now that tone composited to full
-opacity, with the accent as its border (the theme's selected-border alpha
-defaults to 0, which would leave nothing to separate it from the card).
+before it is seen. Enter again re-copies; the pill fades out on its own after
+about a second and a half, and a click outside closes the card (and the pill
+with it). **Esc does not dismiss it** — Esc clears the query first, and only
+closes the launcher when the query is already empty. The pill used to be the
+theme's 8 %-alpha highlight, which read straight through a busy background — it
+is now that tone composited to full opacity, with the accent as its border
+(the theme's selected-border alpha defaults to 0, which would leave nothing to
+separate it from the card).
 
 **Ctrl+V** (or **Shift+Insert**) reads the clipboard and appends it to the query —
 the launcher has no text field, so this is how a copied hex, path or phrase gets
-in. It works in `dmenu` prompts too (those are the same filter, rebuilt against
-the caller's list). Only the first line is used, control characters are dropped and the paste is
+in. Only the first line is used, control characters are dropped and the paste is
 capped at 200 characters, so dropping a document in cannot fill the query with
 something unreadable. Pasting `#ff000080` answers with the colour row; a
 clipboard holding an image pastes nothing (silently, as a text field would).
 
+The 200-character cap counts **characters, not bytes**: a paste that would cut
+an emoji in half is trimmed one character earlier instead. Half a character is
+not a character, and the rest of the launcher (the web-search row builds a URL
+out of the query) cannot encode one.
+
 **Typing is not restricted to Shift**: any key that produces a printable
 character types it, including the AltGr/Option level-3 characters an
-international layout keeps there (`#`, `@`, `~`, brackets …). Ctrl and Meta
-combinations stay reserved for shortcuts, so nothing is hijacked.
+international layout keeps there (`#`, `@`, `~`, brackets …) and emoji, which
+count as one character. Ctrl and Meta combinations stay reserved for shortcuts,
+so nothing is hijacked.
 
 ### How answers coexist
 
 Auto-detected math, conversions, and dates **share the list** with menu items,
-files, windows and content hits (that's why `2026-10-11` shows both `2005` *and*
-your dated files). A **leading `=` is exclusive**: it suppresses every other
-tier — `=hello` shows nothing at all.
+files, windows and content hits — so `2+2` shows `4` *and* your matching files.
+A **leading `=` is exclusive for the search tiers**: it suppresses the file,
+content and window tiers and the web row. It does not suppress the menu's own
+rows, which are still listed and still searchable, so `=hello` is the answer
+plus any menu row that matches `hello` — and a `Missing:` notice still appears
+if a tool is absent.
+
+A date is not arithmetic. `2026-10-21` used to be read as `2026 - 10 - 21` and
+answered with **1995**; a date-shaped query is now left to the file and window
+tiers, and only an explicit `=2026-10-21` asks for the arithmetic.
+
+### Your own menu rows (`~/.config/omarchy/extensions/omarchy-menu.jsonc`)
+
+The launcher reads Omarchy's own menu file **and** your extension file, and
+merges the two. The merge is **per key**: only the fields your entry actually
+writes change; every other field of the default row is left alone.
+
+```jsonc
+{
+  // A default row, changed in two places. Its icon, action, description and
+  // guards are the defaults' — you did not restate them, so they stay.
+  "system.lock": { "label": "Lock Screen", "action": "hyprlock" },
+
+  // A row nobody can see. The label and icon it would have had do not matter.
+  "install.docker": { "when": "false" }
+}
+```
+
+Two rules worth knowing:
+
+- **Aliases replace, they do not add up.** A row with `"aliases": ["x"]` ends
+  up with exactly `["x"]` — the default's other aliases are gone. Write them
+  all out if you want to keep them.
+- **`kind` follows the action.** A row whose `action` you clear becomes a
+  submenu rather than a leaf, and a submenu with no children is not shown.
+
+Rows you add outright (an id Omarchy does not know) work the same way: give it
+a `label`, and an `action` if it should do something.
 
 ### Frecency (it learns, then forgets)
 
@@ -229,9 +275,12 @@ restarting the shell.
 
 Every switch lives at the top of the plugin's `files/Menu.qml`, in the "Result
 presentation switches" block — flip one and restart the shell. Edits land in the
-installed checkout (`~/.config/omarchy/plugins/io.github.isseyshiitake.launcher-v2/`);
-note that `omarchy plugin update` refreshes that checkout and will overwrite
-local edits.
+installed checkout (`~/.config/omarchy/plugins/io.github.isseyshiitake.launcher-v2/`).
+`omarchy plugin update` refreshes that checkout with a fast-forward merge, so
+it **refuses** to touch a file you have edited locally rather than overwriting
+it (it reports "cannot fast-forward; you have local changes") — keep your edits
+somewhere else (a patch, or a fork) and re-apply them, or let the update
+through first.
 
 | Property | Default | Effect |
 |---|---|---|
@@ -262,8 +311,10 @@ local edits.
   probe checks exactly that path — a PATH-only or non-FHS install is reported
   as missing rather than failing silently)
 - `hyprctl` — window listing. For **Enter-able** window rows, the
-  `ravi-window-focus` helper (one command; without it the tier is visible but
-  its rows report the helper missing, and nothing else breaks):
+  `ravi-window-focus` helper (one command; without it the **whole window tier
+  switches itself off** — the launcher would otherwise list windows whose Enter
+  could do nothing, so it shows a `Missing: ravi-window-focus` notice instead
+  and the other tiers are unaffected):
 
   ```sh
   install -Dm755 \
@@ -314,7 +365,9 @@ For transparency, the trade-offs of the plugin format against the
 
 - The launcher key keeps opening the stock menu until you rebind (above).
 - The pack's close-fade fix (a replacement `Ui/OverlayWindow.qml`) cannot ship
-  inside a plugin, so closing uses the shell's stock close behaviour.
+  inside a plugin, so closing uses the shell's stock close behaviour. The fade
+  code is still in the plugin's `Menu.qml`; it simply has nothing to hold the
+  surface open for, so it never plays here.
 - The menu-ranking tweak (leaf actions above submenu containers) is **built
   in** here — the plugin carries its own patched `MenuModel.js` rather than
   patching your checkout.
@@ -333,7 +386,9 @@ the frecency state file is inert without the plugin — keep or delete it.
 ## Compatibility
 
 Tested against Omarchy shell `821ae58` (2026-10-02), Quickshell 0.2.1,
-Hyprland 0.56.2 on Fedora 44, and validated with `omarchy plugin validate`.
+Hyprland 0.56.2 on Fedora 44, and validated with `omarchy plugin validate .`
+(the command takes the plugin **folder** as its argument; a bare
+`omarchy plugin validate` exits with "plugin folder not found").
 The QML is defensive: missing binaries, empty or malformed recents/places
 files, and unreadable JSON all degrade to empty tiers rather than errors.
 Upstream `Menu.qml` drift affects the plugin the same way it affects the pack —
@@ -344,7 +399,7 @@ here (`omarchy plugin update io.github.isseyshiitake.launcher-v2`).
 
 File search covers `$HOME` only, using fd's defaults (hidden and gitignored
 paths skipped). Symlinks are neither followed nor matched while searching —
-fd reports them as their own type — but they *are* listed while browsing a
+fd's file type does not include them — but they *are* listed while browsing a
 folder. Filenames containing newlines cannot be represented in the line
 protocol the tiers use and would surface as junk rows.
 Window rows read `hyprctl clients`.

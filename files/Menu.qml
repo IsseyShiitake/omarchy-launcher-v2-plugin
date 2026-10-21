@@ -1085,6 +1085,14 @@ Item {
     var q = String(query || "").trim()
     if (!q) return ""
     if (q.charAt(0) === "=") return q.substring(1).trim()
+    // A date is not arithmetic. "2026-10-21" has a digit and a "-", so the
+    // auto-detect used to accept it — and the calculator then read it as
+    // 2026 - 10 - 21 and answered 1995, with the answer row claiming it.
+    // Year-first (2026-10-21, 2026/10/21, 2026.10.21) and year-last
+    // (10-21-2026) shapes are rejected before the calculator sees them; an
+    // explicit "=" still computes them, because the user asked for it.
+    if (/^\d{4}[-/.]\d{1,2}(?:[-/.]\d{1,2})?$/.test(q)) return ""
+    if (/^\d{1,2}[-/.]\d{1,2}[-/.]\d{4}$/.test(q)) return ""
     if (/[0-9]/.test(q) && /[+\-*/%^(]/.test(q)) return q
     return ""
   }
@@ -2016,10 +2024,15 @@ Item {
       // hyprctl run can never leave rows that matched an older filter on
       // screen. Windows answer a search, so a folder listing leaves them out.
       // A cache older than the ceiling counts as absent (fail-closed).
+      //
+      // The window tier waits for a SECOND character, like the file and
+      // content tiers do. It used to answer from the warm cache as soon as
+      // the filter was one character long, so backing "ab" down to "a"
+      // listed up to eight windows matched on a single letter.
       var winFresh = root.winClientsJson !== ""
         && (Date.now() - root.winClientsAt) < root.winClientsMaxAgeMs
       var winRows = (browsing || answer.mode === "forced" || !winFresh
-        || root.binaries.focus === false)
+        || query.length < 2 || root.binaries.focus === false)
         ? [] : root.windowRowsFor(root.winClientsJson, query)
       if (winRows.length > 0) {
         var winSection = rows.length > 0 ? "windows" : ""
@@ -2110,8 +2123,16 @@ Item {
         ? root.fileTierLimit : root.uncappedFileLimit
       var folderTotal = folderHits.length
       var fileTotal = fileHits.length
-      var folderCut = !browsing && folderTotal > folderLimit
-      var fileCut = !browsing && fileTotal > fileLimit
+      // fd stops at --max-results, so a block that came back exactly full may
+      // have been truncated even when nothing was cut for display. That only
+      // happens when the DISPLAY cap IS the fd cap — the capFileTier:false
+      // mode, where the block holds 6 folders / 12 files. A full block there
+      // used to be reported as an ordinary count with no hint at all, so the
+      // extra matches on disk were simply not accounted for.
+      var folderSaturated = !browsing && folderTotal >= root.fdResultLimit(true)
+      var fileSaturated = !browsing && fileTotal >= root.fdResultLimit(false)
+      var folderCut = !browsing && (folderTotal > folderLimit || folderSaturated)
+      var fileCut = !browsing && (fileTotal > fileLimit || fileSaturated)
       var folderOverflow = folderCut && redirects
       var fileOverflow = fileCut && redirects
       if (folderCut) folderHits = folderHits.slice(0, folderLimit)
@@ -2333,7 +2354,7 @@ Item {
           appIcon: "",
           appId: "",
           label: "Search the web for \u201C" + query + "\u201D",
-          target: "https://duckduckgo.com/?q=" + encodeURIComponent(query),
+          target: "https://duckduckgo.com/?q=" + root.safeEncodeURIComponent(query),
           detail: "DuckDuckGo",
           path: "",
           childCount: 0,
@@ -2442,9 +2463,72 @@ Item {
     var text = String(raw || "")
     text = text.split("\n")[0].replace(/[\u0000-\u001f\u007f]/g, "").trim()
     if (!text) return false
-    if (text.length > 200) text = text.substring(0, 200)
+    // The cap counts CODE POINTS. A UTF-16-unit cap can cut a surrogate pair
+    // in half, and the lone surrogate that survives then makes the web row's
+    // encodeURIComponent throw — which aborted the rebuild AFTER the row
+    // model was cleared, so the list came up empty and every later keystroke
+    // threw again.
+    if (root.codePoints(text).length > 200) text = root.codePoints(text).slice(0, 200).join("")
     root.setFilter(root.filterText ? root.filterText + text : text)
     return true
+  }
+
+  // The characters of a string, counted by CODE POINT rather than by UTF-16
+  // code unit.
+  //
+  // QML's JS engine splits surrogate pairs where a standard engine does not:
+  // Array.from("😀").length is 2 here and 1 in V8. So a check written with
+  // Array.from() refuses an emoji outright, and a cap written with
+  // .length/.substring() can cut a pair in half and leave a lone surrogate —
+  // which then makes encodeURIComponent() throw, aborting the rebuild with
+  // the row model already cleared. This walks the string by hand so the
+  // behaviour is the same in every engine.
+  function codePoints(text) {
+    var s = String(text || "")
+    var out = []
+    var i = 0
+    while (i < s.length) {
+      var c = s.charCodeAt(i)
+      var low = i + 1 < s.length ? s.charCodeAt(i + 1) : 0
+      // A high surrogate followed by a LOW surrogate is one astral character.
+      // A high surrogate followed by anything else is a lone one: it stays a
+      // single unit, so it is not merged with — and hidden behind — the
+      // character after it.
+      var step = (c >= 0xD800 && c <= 0xDBFF && low >= 0xDC00 && low <= 0xDFFF) ? 2 : 1
+      out.push(s.substring(i, i + step))
+      i += step
+    }
+    return out
+  }
+
+  // encodeURIComponent throws URIError on a lone surrogate. The filter can
+  // still hold one if the clipboard handed us a broken string, so the web
+  // row's URL is built defensively: a query that cannot be encoded loses only
+  // the units that cannot be encoded, instead of taking the whole rebuild down
+  // with it.
+  function safeEncodeURIComponent(value) {
+    var text = String(value === undefined || value === null ? "" : value)
+    try {
+      return encodeURIComponent(text)
+    } catch (e) {
+      // Strip only the LONE surrogates. A blanket /[\uD800-\uDFFF]/g strip
+      // would also delete both halves of every valid pair, turning an emoji
+      // in the same query into nothing.
+      var parts = root.codePoints(text)
+      var kept = []
+      for (var i = 0; i < parts.length; i++) {
+        var unit = parts[i].charCodeAt(0)
+        if (parts[i].length === 1 && unit >= 0xD800 && unit <= 0xDFFF) continue
+        kept.push(parts[i])
+      }
+      try {
+        return encodeURIComponent(kept.join(""))
+      } catch (e2) {
+        // Cannot happen once the lone units are gone; a URL builder must never
+        // throw, though, so the row degrades to an empty query instead.
+        return ""
+      }
+    }
   }
 
   // The whole key decision tree in one callable place. Keys.onPressed cannot be
@@ -2525,14 +2609,18 @@ Item {
         else if (displayModel.count > 0) root.activateIndex(root.cursorActive ? root.selectedIndex : 0)
       } else if (root.cursorActive) root.activateIndex(root.selectedIndex)
       else root.settleCursor()
-    } else if (text && Array.from(text).length === 1
+    } else if (text && root.codePoints(text).length === 1
                && text.codePointAt(0) >= 32 && text.codePointAt(0) !== 127
                && (modifiers & (Qt.ControlModifier | Qt.MetaModifier)) === 0) {
       // Anything that is not a Ctrl/Meta shortcut types: Shift for capitals and
       // AltGr/Alt for the level-3 characters an international layout keeps there
       // (#, @, ~, brackets …), which the old No/Shift-only test silently ate.
       // Counted in CODE POINTS so a surrogate pair (emoji, one keypress on
-      // some layouts) is one character, not a refused length-2 string.
+      // some layouts) is one character, not a refused length-2 string. The
+      // count uses codePoints() rather than Array.from(): in this engine
+      // Array.from() splits surrogate pairs (an emoji came back as 2), so the
+      // emoji was refused — and, being unhandled, it also leaked to the focus
+      // chain instead of being typed.
       // Keys that produce no text (function keys, Alt+Tab) never reach here, so
       // no shortcut is hijacked. Known limitation, deliberately left: a layout
       // that delivers AltGr AS Ctrl+Alt (rather than GroupSwitchModifier) is
@@ -2681,7 +2769,16 @@ Item {
       opened = false
       filterText = ""
       root.clearFileSearch()
-      Util.execArgv(["xdg-open", row.target])
+      // An opener that is actually installed: xdg-open first, then whatever
+      // the file chain would use. A hardcoded xdg-open died silently on a
+      // machine without it, and the "Missing:" notice never fired for it.
+      var webOpener = root.webOpenCommand
+      if (webOpener === "") {
+        Util.execDetached("notify-send -u normal " + Util.shellQuote("Nothing can open the browser")
+          + " " + Util.shellQuote("No opener was found (xdg-open / kde-open / gio) — install one and search again."))
+      } else {
+        Util.execArgv(String(webOpener).trim().split(/\s+/).concat([row.target]))
+      }
     } else {
       root.applySelected(row.itemId, row.action)
     }
@@ -2806,7 +2903,25 @@ Item {
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
   // The capability probe runs once, at shell start.
-  Component.onCompleted: root.probeBinaries()
+  Component.onCompleted: {
+    root.probeBinaries()
+    // Opt into the overlay's post-close geometry hold, so the card's 200 ms
+    // fade-out can play before the surface parks to 1x1. The hold is opt-in
+    // because it keeps the surface fullscreen AND contentItem visible, which
+    // would leave an opaque scrim on screen for consumers that draw one
+    // without binding it to `shown` (the emoji picker, the clipboard history,
+    // the reminder flow, the wifi-QR panel).
+    //
+    // Guarded, because in plugin mode the overlay is the STOCK one, which has
+    // no hideHoldMs property: reading an unknown property yields undefined
+    // (it does not throw), so the assignment is simply skipped and the
+    // surface collapses immediately — the plugin's documented behaviour.
+    try {
+      if (panel.hideHoldMs !== undefined) panel.hideHoldMs = 280
+    } catch (e) {
+      // An overlay without the hold property: nothing to opt into.
+    }
+  }
 
   ListModel { id: displayModel }
 
@@ -2950,6 +3065,20 @@ Item {
     }
     return "xdg-open"
   }
+  // The web row opens a URL, not a file. xdg-open is the right tool for a
+  // URL, but it is not installed everywhere, and a row that dies silently
+  // is worse than one that says why: the "Missing:" notice only fires when
+  // ALL THREE openers are gone, so a lone missing xdg-open took the web
+  // search row down without a word. The URL row therefore picks the first
+  // opener that is actually present, xdg-open first.
+  readonly property string webOpenCommand: {
+    if (root.openerAvailable("xdg-open")) return "xdg-open"
+    var order = root.fileOpenOrder()
+    for (var i = 0; i < order.length; i++) {
+      if (root.openerAvailable(String(order[i]).split(/\s+/)[0])) return order[i]
+    }
+    return ""
+  }
   // Opens a path the way this desktop opens it. The path is an ARGUMENT, never
   // spliced into a command string, so a filename cannot be read as shell code.
   function openPath(path) {
@@ -2958,7 +3087,12 @@ Item {
     // With no resolver at all the spawn would be a closed menu and nothing
     // else — the menu is already closed here, so a notification is the only
     // channel left.
-    if (root.binariesProbed && root.binaries.kdeopen === false
+    //
+    // A CONFIGURED opener is the user's explicit choice and is exempt: it
+    // works whether or not kde-open / gio / xdg-open are installed, so
+    // reporting "nothing can open files" while a working opener sits in
+    // fileOpenCommand was wrong — the configured command was never run.
+    if (root.fileOpenCommand === "" && root.binariesProbed && root.binaries.kdeopen === false
         && root.binaries.gio === false && root.binaries.xdgopen === false) {
       Util.execDetached("notify-send -u normal " + Util.shellQuote("Nothing can open files")
         + " " + Util.shellQuote("No opener was found (kde-open / gio / xdg-open) — install one and search again."))
@@ -2999,7 +3133,7 @@ Item {
   // and a command with no %1 gets it as a trailing argument instead of
   // silently dropping the query — this row's whole purpose is the handover.
   function searchQueryToken(query) {
-    return encodeURIComponent(String(query || "")).replace(/[!'()*~]/g, function(ch) {
+    return root.safeEncodeURIComponent(query).replace(/[!'()*~]/g, function(ch) {
       return "%" + ch.charCodeAt(0).toString(16).toUpperCase()
     })
   }
@@ -3046,6 +3180,12 @@ Item {
     focusProc.frecencyKey = frecencyKey
     focusProc.command = [Quickshell.env("HOME") + "/.local/bin/ravi-window-focus", address]
     focusProc.running = true
+    // Arm the watchdog. Without this the timer that is supposed to kill a
+    // wedged focus run was never started: a hung ravi-window-focus kept the
+    // single focus slot occupied, every later Enter silently overwrote the
+    // one pending slot, and window focusing stayed dead until the shell was
+    // restarted. Every other Process here arms its watchdog at launch.
+    focusWatchdog.restart()
   }
 
   function selectFromPointer(index, item, mouse) {

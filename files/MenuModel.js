@@ -1,7 +1,108 @@
+// JSONC -> JSON, in ONE pass.
+//
+// The previous version only removed comments that occupied a whole line
+// (/^\s*\/\/[^\n]*(\n|$)/gm) and then stripped trailing commas with a regex
+// that ran over string literals too. Both were landmines:
+//
+//   - ONE trailing "// note" on a value's line made the WHOLE file parse to
+//     nothing. The launcher then showed an empty menu, with no error and no
+//     log line anywhere: parseMenuJsonc returns [] and the rebuild proceeds
+//     with nothing.
+//   - a string VALUE containing ",}" or ",]" was corrupted, because the
+//     trailing-comma regex matched inside the quotes.
+//
+// This walks the text instead: a comment ends at a newline (//) or at its
+// closing */ (/* */), a string is copied verbatim with its escapes intact,
+// and a comma before a closing brace or bracket is dropped only when it is
+// outside a string.
 function stripJsonc(raw) {
-  return String(raw || "")
-    .replace(/^\s*\/\/[^\n]*(\n|$)/gm, "")
-    .replace(/,(\s*[}\]])/g, "$1")
+  var text = String(raw || "")
+  // A UTF-8 BOM is invisible in every editor and makes JSON.parse throw, which
+  // would turn the whole menu into nothing. Drop it before anything else.
+  if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1)
+  var out = ""
+  var i = 0
+  var n = text.length
+  var inString = false
+  var escaped = false
+
+  while (i < n) {
+    var ch = text.charAt(i)
+
+    if (inString) {
+      out += ch
+      if (escaped) escaped = false
+      else if (ch === "\\") escaped = true
+      else if (ch === '"') inString = false
+      i += 1
+      continue
+    }
+
+    if (ch === '"') {
+      inString = true
+      out += ch
+      i += 1
+      continue
+    }
+
+    if (ch === "/" && text.charAt(i + 1) === "/") {
+      while (i < n && text.charAt(i) !== "\n") i += 1
+      continue
+    }
+
+    if (ch === "/" && text.charAt(i + 1) === "*") {
+      var end = text.indexOf("*/", i + 2)
+      i = end < 0 ? n : end + 2
+      continue
+    }
+
+    if (ch === ",") {
+      // A trailing comma is legal in JSONC and illegal in JSON: drop it —
+      // but only outside a string, so a value like "x,}" keeps its comma.
+      //
+      // "Trailing" has to look PAST a comment. `"label": "A", // note` on the
+      // line above `}` is the ordinary way people annotate an entry, and
+      // looking only at the next non-space character saw the "/" and kept the
+      // comma, so JSON.parse threw and the whole menu came up empty — the
+      // exact silent-empty-menu failure this parser exists to prevent.
+      var next = text.charAt(nextSignificantIndex(text, i + 1))
+      if (next === "}" || next === "]") {
+        i += 1
+        continue
+      }
+    }
+
+    out += ch
+    i += 1
+  }
+
+  return out
+}
+
+// The index of the next character that is neither whitespace nor inside a
+// comment, starting at `from`. A comma is "trailing" when that character is a
+// closing brace or bracket — and a comment in between must not hide it.
+function nextSignificantIndex(text, from) {
+  var i = from
+  var n = text.length
+  while (i < n) {
+    var ch = text.charAt(i)
+    if (/\s/.test(ch)) {
+      i += 1
+      continue
+    }
+    if (ch === "/" && text.charAt(i + 1) === "/") {
+      while (i < n && text.charAt(i) !== "\n") i += 1
+      continue
+    }
+    if (ch === "/" && text.charAt(i + 1) === "*") {
+      var end = text.indexOf("*/", i + 2)
+      i = end < 0 ? n : end + 2
+      continue
+    }
+    return i
+  }
+  return n
 }
 
 function normalizeAliases(value) {
@@ -35,8 +136,21 @@ function normalizeItem(id, raw) {
     aliases: aliases,
     when: value.when || "",
     checked: value.checked || "",
-    disabled: value.disabled || ""
+    disabled: value.disabled || "",
+    // The keys the source actually WROTE. normalizeItem fills every field
+    // with a default, so a merge cannot tell "the user left this alone"
+    // from "the user set it to empty" without this list. It is what makes
+    // the merge per-key: see mergeMenuSources.
+    specified: specifiedKeys(value)
   }
+}
+
+// The keys a raw JSONC entry actually carries.
+function specifiedKeys(value) {
+  var out = []
+  if (!value || typeof value !== "object") return out
+  for (var key in value) out.push(key)
+  return out
 }
 
 function parseMenuJsonc(raw) {
@@ -47,6 +161,11 @@ function parseMenuJsonc(raw) {
   try {
     parsed = JSON.parse(stripped)
   } catch (e) {
+    // A malformed file used to yield [] with no word anywhere: the launcher
+    // came up empty and nothing said why. The caller cannot fix what it is
+    // not told about, so say it once, in the shell log.
+    console.warn("[launcher] menu JSONC did not parse — this menu source is ignored: "
+      + (e && e.message ? e.message : String(e)))
     return []
   }
   if (typeof parsed !== "object" || parsed === null) return []
@@ -63,6 +182,18 @@ function parseMenuJsonc(raw) {
   return out
 }
 
+// Merge the default menu with the user's extension file.
+//
+// PER KEY: only the fields a later source actually WROTE replace the earlier
+// ones. It used to copy every key of the later entry over the earlier one —
+// and normalizeItem fills every field, so a user entry that only added an
+// alias wiped the default row's label, icon, action, description and guards,
+// and re-derived `kind` from the now-empty action (an "action" row became a
+// childless "menu", and a childless menu is invisible). The in-code comment
+// promised per-key behaviour; this is it.
+//
+// `kind` follows the merge, because it is derived from action/target: a row
+// whose action was replaced or cleared is an action row again, or a menu.
 function mergeMenuSources(defaultItems, userItems) {
   var nextItems = ({})
   var nextOrder = []
@@ -73,12 +204,31 @@ function mergeMenuSources(defaultItems, userItems) {
     for (var i = 0; i < src.length; i++) {
       var entry = src[i]
       if (!entry || !entry.id) continue
-      if (!nextItems[entry.id]) nextOrder.push(entry.id)
-      var prior = nextItems[entry.id] || {}
+      var prior = nextItems[entry.id]
+      if (!prior) nextOrder.push(entry.id)
       var merged = {}
-      for (var k in prior) merged[k] = prior[k]
-      for (var k2 in entry) merged[k2] = entry[k2]
+      if (prior) {
+        // A later source: keep the earlier row, then apply ONLY the fields
+        // this source actually wrote.
+        for (var k in prior) merged[k] = prior[k]
+        var specified = entry.specified
+        if (specified) {
+          for (var k2 = 0; k2 < specified.length; k2++) {
+            if (specified[k2] === "specified") continue
+            merged[specified[k2]] = entry[specified[k2]]
+          }
+        } else {
+          // An entry with no key list (a hand-built row) replaces wholesale.
+          for (var k3 in entry) merged[k3] = entry[k3]
+        }
+      } else {
+        // The first source contributes the whole normalised entry, derived
+        // fields (parent, kind) included.
+        for (var k4 in entry) merged[k4] = entry[k4]
+      }
       merged.id = entry.id
+      merged.kind = merged.action ? "action" : (merged.target ? "link" : "menu")
+      delete merged.specified
       nextItems[entry.id] = merged
     }
   }
@@ -87,7 +237,7 @@ function mergeMenuSources(defaultItems, userItems) {
     nextItems.root = { id: "root", parent: "", kind: "menu", icon: "", iconFont: "", label: "Go", title: "", target: "", description: "", aliases: [], when: "", checked: "", disabled: "", action: "", provider: "" }
     nextOrder.unshift("root")
   }
-  for (var k3 = 0; k3 < nextOrder.length; k3++) nextItems[nextOrder[k3]].order = k3
+  for (var k4 = 0; k4 < nextOrder.length; k4++) nextItems[nextOrder[k4]].order = k4
 
   return {
     items: nextItems,
@@ -340,7 +490,11 @@ function matchesQuery(entry, query, visible) {
 
 function searchScore(items, entry, query) {
   var needle = String(query || "").toLowerCase().trim()
-  var label = entry.label.toLowerCase()
+  // A missing label used to throw here (entry.label.toLowerCase()), taking
+  // the whole search rebuild down with it; a missing order used to make the
+  // score NaN, which is not a number to sort by. Both are defended now: a
+  // row without a label simply matches nothing.
+  var label = String(entry.label || "").toLowerCase()
   var nameText = nameSearchText(entry)
   var descriptionText = String(entry.description || "").toLowerCase()
   var score = 80
@@ -362,7 +516,7 @@ function searchScore(items, entry, query) {
   // equal match. Outrank those, but stay inside the tier so better ones win.
   if (entry.kind === "app") score -= 5
 
-  return score * 1000 + depthFor(items, entry.id) * 25 + entry.order
+  return score * 1000 + depthFor(items, entry.id) * 25 + (entry.order || 0)
 }
 
 function displayRow(items, itemOrder, checkedResults, disabledResults, entry, detail, score, section) {
@@ -481,9 +635,22 @@ function substituteGuardReaders(expression) {
   return expression
 }
 
+// The id comes from a JSONC key and is spliced into a shell script, so it
+// is QUOTED. It used to go into an unquoted `echo`, where a key holding a
+// space was split into words and a key holding a shell metacharacter broke
+// the line — bash then refused to parse the WHOLE batch, so every when:,
+// checked: and disabled: in the menu went unanswered and every guarded row
+// showed. printf also avoids the word splitting and globbing an unquoted
+// echo would do.
+function shellQuote(text) {
+  return "'" + String(text === undefined || text === null ? "" : text).replace(/'/g, "'\\''") + "'"
+}
+
 function guardLine(id, tag, expression) {
-  return "if { " + substituteGuardReaders(expression) + "; } >/dev/null 2>&1; then echo "
-    + id + ":" + tag + ":1; else echo " + id + ":" + tag + ":0; fi\n"
+  var quoted = shellQuote(id)
+  return "if { " + substituteGuardReaders(expression) + "; } >/dev/null 2>&1; then "
+    + "printf '%s:%s:1\\n' " + quoted + " " + shellQuote(tag) + "; else "
+    + "printf '%s:%s:0\\n' " + quoted + " " + shellQuote(tag) + "; fi\n"
 }
 
 // How many subshells share the guards. Most of the batch is a few dozen
@@ -517,8 +684,19 @@ function guardScript(items) {
     var entry = items[ids[i]]
     if (!entry) continue
     if (entry.when) lines.push(guardLine(ids[i], "w", entry.when))
-    if (entry.checked) lines.push(guardLine(ids[i], "c", entry.checked))
-    if (entry.disabled) lines.push(guardLine(ids[i], "d", entry.disabled))
+    // A row that is UNCONDITIONALLY hidden — its `when` is the literal
+    // "false" — never shows, so its marker guards (checked / disabled)
+    // cannot change anything that is visible. They are skipped.
+    //
+    // This is not a micro-optimisation. A user extension hides a row by
+    // writing {"when": "false"} and nothing else, and the default menu
+    // gives many of those rows a `checked` that probes the system — the
+    // default-terminal probe alone costs most of a second where
+    // xdg-terminal-exec is slow, and the whole batch waits for its reader.
+    // Evaluating a marker for a row nobody can see is pure cost.
+    var hidden = entry.when && String(entry.when).trim() === "false"
+    if (entry.checked && !hidden) lines.push(guardLine(ids[i], "c", entry.checked))
+    if (entry.disabled && !hidden) lines.push(guardLine(ids[i], "d", entry.disabled))
   }
   if (lines.length === 0) return ""
 
