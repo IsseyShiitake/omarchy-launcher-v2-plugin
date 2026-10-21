@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.isseyshiitake.launcher-v2",
   "name": "Omarchy Launcher v2",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "author": "IsseyShiitake",
   "description": "KRunner-grade upgrades for the Omarchy menu: files & folders, full-text search, calculations, unit & colour answers, window switching, and recents with frecency. Zero new daemons.",
   "kinds": [
