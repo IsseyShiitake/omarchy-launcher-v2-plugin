@@ -409,6 +409,8 @@ choose to press Enter on.
 
 ## Development
 
+[![check](https://github.com/IsseyShiitake/omarchy-launcher-v2-plugin/actions/workflows/check.yml/badge.svg)](https://github.com/IsseyShiitake/omarchy-launcher-v2-plugin/actions/workflows/check.yml)
+
 `make check` runs the verification suite: the model layer under Node, the
 launcher's own functions under a real Qt6 engine (PySide6), and a byte-for-byte
 comparison with the pack edition when both checkouts sit side by side. Anything

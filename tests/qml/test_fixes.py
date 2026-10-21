@@ -55,6 +55,14 @@ def check(n, c, d=None):
         F.append(n + ("" if d is None else "  -> " + json.dumps(d, default=str)))
 def eq(n, a, e): check(n, a == e, {"actual": a, "expected": e})
 
+# The harness is DERIVED from Menu.qml by parsing it. If a refactor moves or
+# reshapes functions, extraction could cover less while every assertion still
+# passes — so the count itself is asserted. Raise the floor when functions are
+# added; never lower it silently.
+with open(os.path.join(QML_DIR, "funcs.json"), encoding="utf-8") as _fh:
+    _nfuncs = len(json.load(_fh))
+check("the harness extracted the launcher's functions (%d)" % _nfuncs, _nfuncs >= 130, _nfuncs)
+
 # ---------------------------------------------------------------- FIX 1
 print("=== FIX 1: the focus watchdog is armed ===")
 # launchWindowFocus must restart the watchdog. The harness's focusWatchdog is a

@@ -7,10 +7,17 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT" || exit 2
 
 PASS=0 FAIL=0 SKIP=0
+STRICT="${STRICT:-0}"   # 1 = a skip is a failure (CI)
 FAILED=()
 ok()   { PASS=$((PASS + 1)); printf '  ok    %s\n' "$1"; }
 bad()  { FAIL=$((FAIL + 1)); FAILED+=("$1"); printf '  FAIL  %s\n' "$1"; }
-skip() { SKIP=$((SKIP + 1)); printf '  skip  %s\n' "$1"; }
+skip() {
+  if [[ "$STRICT" == "1" ]]; then
+    bad "$1 (skipped, and STRICT=1)"
+  else
+    SKIP=$((SKIP + 1)); printf '  skip  %s\n' "$1"
+  fi
+}
 
 run() {
   local name="$1"; shift
@@ -27,8 +34,9 @@ run() {
 
 printf '==> static\n'
 if node --check files/MenuModel.js 2>/dev/null; then ok "MenuModel.js parses"; else bad "MenuModel.js parses"; fi
-if [[ -x /usr/lib64/qt6/bin/qmllint ]] || command -v qmllint >/dev/null 2>&1; then
-  QMLLINT=$(command -v qmllint || echo /usr/lib64/qt6/bin/qmllint)
+QMLLINT=$(command -v pyside6-qmllint || command -v qmllint || true)
+[[ -z "$QMLLINT" && -x /usr/lib64/qt6/bin/qmllint ]] && QMLLINT=/usr/lib64/qt6/bin/qmllint
+if [[ -n "$QMLLINT" ]]; then
   out=$("$QMLLINT" -I "$ROOT/files" files/Menu.qml 2>&1 || true)
   if printf '%s' "$out" | grep -qE '(^|[^a-zA-Z])Error:'; then
     bad "qmllint reports no errors"

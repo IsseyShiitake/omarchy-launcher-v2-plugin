@@ -1,0 +1,52 @@
+name: check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: omarchy-launcher-v2-plugin
+
+      # The edition comparison needs the pack beside this checkout.
+      - name: Sibling pack checkout
+        run: git clone --depth 1 https://github.com/IsseyShiitake/omarchy-launcher-v2.git "$GITHUB_WORKSPACE/omarchy-launcher-v2"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # PySide6's wheels need these to load Qt offscreen.
+      - name: Qt runtime for the offscreen engine
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1 libegl1 libxkbcommon0 libdbus-1-3 libfontconfig1 libglib2.0-0
+          python -m pip install --upgrade pip
+          python -m pip install PySide6
+
+      - name: qmllint
+        run: |
+          if ! command -v pyside6-qmllint >/dev/null 2>&1 && ! command -v qmllint >/dev/null 2>&1; then
+            sudo apt-get install -y qt6-declarative-dev-tools
+          fi
+
+      # STRICT=1 turns any skip into a failure: a suite that cannot run here is
+      # a hole in the verification, not a pass.
+      - name: make check
+        working-directory: omarchy-launcher-v2-plugin
+        env:
+          STRICT: '1'
+          QT_QPA_PLATFORM: offscreen
+        run: make check

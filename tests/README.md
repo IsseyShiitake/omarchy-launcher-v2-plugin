@@ -4,6 +4,11 @@
 machine and prints `ok`, `FAIL` or `skip` per check. A skip always names the
 missing prerequisite — it is never counted as a pass.
 
+`STRICT=1 make check` turns every skip into a failure. CI runs that way, so a
+runner that loses PySide6, the sibling checkout or qmllint fails instead of
+reporting a green job with a quarter of the suite missing. The workflow
+(`.github/workflows/check.yml`) checks out both editions side by side.
+
 | Suite | What it pins down | Needs |
 |---|---|---|
 | `model/test_model.js` | the model layer: JSONC, normalisation, merge, scoring, rows, guard batching | Node |
