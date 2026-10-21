@@ -406,6 +406,15 @@ Window rows read `hyprctl clients`.
 Nothing is sent anywhere; the only fallback row is an explicit web search you
 choose to press Enter on.
 
+
+## Development
+
+`make check` runs the verification suite: the model layer under Node, the
+launcher's own functions under a real Qt6 engine (PySide6), and a byte-for-byte
+comparison with the pack edition when both checkouts sit side by side. Anything
+that cannot run — PySide6 not installed, the pack not cloned — is reported as a
+skip with the reason, never counted as a pass. See `tests/README.md`.
+
 ## Credits & license
 
 Built on top of [Omarchy](https://omarchy.org) by DHH and contributors —

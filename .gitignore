@@ -4,3 +4,5 @@
 # Local session journals — never publish these with the pack.
 log.md
 log-archive.md
+__pycache__/
+build/
